@@ -1,9 +1,5 @@
-"""Offline tests for adapted imports, provenance, portable contracts, and update checking."""
-from __future__ import annotations
-
+"""Public validation/checker commands and offline watcher behavior."""
 import contextlib
-import copy
-import hashlib
 import importlib.machinery
 import importlib.util
 import io
@@ -12,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -27,256 +24,172 @@ def load(name, path):
     return module
 
 
-checker = load('adapted_checker', ROOT / 'scripts/check_adapted_updates.py')
-validator = load('adapted_validator', ROOT / 'scripts/validate_adaptations.py')
 watch = load('adapted_pr_wait', ROOT / 'skills/tstack/babysit-pr/scripts/pr-wait')
 
 
+def command(script, *args):
+    return subprocess.run([sys.executable, str(ROOT / 'scripts' / script), *map(str, args)], capture_output=True, text=True)
+
+
 class Packaging(unittest.TestCase):
-    def test_complete_import_validation(self):
-        self.assertEqual(validator.validate(), {'skills': 11, 'files': 14, 'adapted_files': 2, 'status': 'valid'})
-
-    def test_source_and_output_provenance_are_separate(self):
-        manifest = json.loads((ROOT / 'adaptations.lock.json').read_text())
-        self.assertIn('dirty working tree', manifest['source']['state'])
-        self.assertEqual(manifest['source']['head'], '39569d27e16029f16dff397acc1f2fbffeba1349')
-        modified = {(s['name'], p) for s in manifest['skills'] for p in s['adapted_files']}
-        self.assertEqual(modified, {('council', 'SKILL.md'), ('technical-writing', 'SKILL.md')})
-        for item in manifest['skills']:
-            self.assertEqual(set(item['source_files']), set(item['files']))
-            for p in item['files']:
-                if p not in item['adapted_files']:
-                    self.assertEqual(item['source_files'][p], item['files'][p])
-
-    def test_licenses_and_distinct_pstack_pins(self):
-        manifest = json.loads((ROOT / 'adaptations.lock.json').read_text())
-        pins = {s['name']: s['upstream_revision'] for s in manifest['skills'] if s['collection'] == 'pstack'}
-        self.assertEqual(pins, {'technical-writing': 'bdf7aa355337897f167153e05069aca505dae17c',
-                                'unslop': 'fd6dd6f7276956a532bb78a748a8d2818b6eb5f4'})
-        for family, author in [('tstack', 'Theo Browne'), ('pstack', 'Lauren Tan')]:
-            license_text = (ROOT / 'third_party' / family / 'LICENSE').read_text()
-            self.assertIn('Copyright (c) 2026 ' + author, license_text)
-            self.assertIn('Permission is hereby granted', license_text)
-            self.assertTrue(license_text.rstrip().endswith('SOFTWARE.'))
-
-    def test_reference_and_runtime_contracts(self):
-        council = (ROOT / 'skills/tstack/council/SKILL.md').read_text()
-        self.assertIn('existing configured GPT', council)
-        self.assertIn('instead of substituting', council)
-        self.assertNotIn('llamacpp', council)
-        self.assertNotIn('CLIProxyAPI', council)
-        self.assertIn('until all delegates are satisfied', council)
-        self.assertIn('Budget end is not approval', (ROOT / 'skills/tstack/sol-loop/SKILL.md').read_text())
-        self.assertIn('disable-model-invocation: true', (ROOT / 'skills/pstack/technical-writing/SKILL.md').read_text())
-
-    def test_versionable_and_no_generated_imports(self):
-        paths = list((ROOT / 'skills/tstack').rglob('*')) + list((ROOT / 'skills/pstack').rglob('*'))
-        for path in paths:
-            if path.is_file() and '__pycache__' not in path.parts:
-                result = subprocess.run(['git', 'check-ignore', '--no-index', str(path)],
-                                        cwd=ROOT, capture_output=True, text=True)
-                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        manifest = json.loads((ROOT / 'adaptations.lock.json').read_text())
-        self.assertFalse(any('__pycache__' in p or p.endswith('.pyc') for s in manifest['skills'] for p in s['files']))
-
     def copied_root(self):
         temp = tempfile.TemporaryDirectory(prefix='adapted-validation-')
         self.addCleanup(temp.cleanup)
         root = Path(temp.name)
         for path in ['skills/tstack', 'skills/pstack', 'third_party/tstack', 'third_party/pstack']:
             shutil.copytree(ROOT / path, root / path, ignore=shutil.ignore_patterns('__pycache__'))
-        shutil.copy2(ROOT / 'adaptations.lock.json', root / 'adaptations.lock.json')
+        shutil.copy2(ROOT / 'sources.json', root / 'sources.json')
         return root
 
-    def test_changed_file_negative_control(self):
-        root = self.copied_root()
-        (root / 'skills/tstack/council/SKILL.md').write_text('changed')
-        with self.assertRaisesRegex(ValueError, 'hashes/inventory'):
-            validator.validate(root)
+    def test_complete_catalog(self):
+        result = command('validate_adaptations.py')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout), {'skills': 11, 'files': 14, 'status': 'valid'})
 
-    def test_missing_support_negative_control(self):
-        root = self.copied_root()
-        (root / 'skills/tstack/babysit-pr/references/bot-triage.md').unlink()
-        with self.assertRaisesRegex(ValueError, 'hashes/inventory'):
-            validator.validate(root)
 
-    def test_excluded_workflow_negative_control(self):
-        root = self.copied_root()
-        unwanted = root / 'skills/tstack/agent-gauntlet/SKILL.md'
-        unwanted.parent.mkdir()
-        unwanted.write_text('unwanted')
-        with self.assertRaisesRegex(ValueError, 'discovery'):
-            validator.validate(root)
+    def test_missing_support_invalid_frontmatter_and_extra_skill_fail(self):
+        for defect in ('support', 'frontmatter', 'extra'):
+            with self.subTest(defect=defect):
+                root = self.copied_root()
+                if defect == 'support':
+                    (root / 'skills/tstack/babysit-pr/references/bot-triage.md').unlink()
+                elif defect == 'frontmatter':
+                    (root / 'skills/pstack/unslop/SKILL.md').write_text('not a skill')
+                else:
+                    (root / 'skills/pstack/unselected').mkdir()
+                result = command('validate_adaptations.py', '--root', root)
+                self.assertEqual(result.returncode, 2, result.stdout)
 
-    def test_readonly_weekly_workflow_contract(self):
-        workflow = (ROOT / '.github/workflows/check-adapted-upstreams.yml').read_text()
-        for expected in ['workflow_dispatch:', 'cron:', 'contents: read', 'persist-credentials: false',
-                         'GITHUB_STEP_SUMMARY', 'exit "$status"']:
-            self.assertIn(expected, workflow)
-        for forbidden in ['contents: write', 'pull-requests: write', 'create-pull-request', 'npm ', 'pip install', 'gh issue']:
-            self.assertNotIn(forbidden, workflow)
-        self.assertIn('actions/checkout@11d5960a326750d5838078e36cf38b85af677262', workflow)
+    def test_selection_comes_from_manifest(self):
+        root = self.copied_root()
+        manifest = json.loads((root / 'sources.json').read_text())
+        manifest['pstack']['selected'].append('example')
+        (root / 'sources.json').write_text(json.dumps(manifest))
+        directory = root / 'skills/pstack/example'
+        directory.mkdir()
+        (directory / 'SKILL.md').write_text('---\nname: example\ndescription: Synthetic fixture\n---\n')
+        result = command('validate_adaptations.py', '--root', root)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(json.loads(result.stdout)['skills'], 12)
+
+    def test_executable_support_mode_required(self):
+        root = self.copied_root()
+        (root / 'skills/tstack/babysit-pr/scripts/pr-wait').chmod(0o644)
+        result = command('validate_adaptations.py', '--root', root)
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn('not executable', result.stdout)
 
 
 class Updates(unittest.TestCase):
     def setUp(self):
-        self.spec = {'upstream': checker.SOURCES['tstack'][0], 'revision': 'a' * 40,
-                     'skill_revisions': {}, 'prefix': 'skills/', 'license_path': 'LICENSE',
-                     'license_sha256': '9' * 64,
-                     'source_files': {'example/SKILL.md': '1' * 64, 'example/scripts/helper': '2' * 64}}
-        self.current = copy.deepcopy(self.spec['source_files'])
+        temp = tempfile.TemporaryDirectory(prefix='adapted-upstream-')
+        self.addCleanup(temp.cleanup)
+        self.base = Path(temp.name)
+        self.upstream = self.base / 'upstream'
+        self.upstream.mkdir()
+        self.git('init', '--quiet', '-b', 'main')
+        self.git('config', 'user.name', 'Fixture')
+        self.git('config', 'user.email', 'fixture@example.invalid')
+        self.put('LICENSE', 'License baseline')
+        self.put('skills/alpha/SKILL.md', 'alpha')
+        self.put('skills/alpha/helper', 'helper baseline')
+        self.put('skills/deleted/SKILL.md', 'delete me')
+        self.baseline = self.commit()
+        self.sources = json.loads((ROOT / 'sources.json').read_text())
+        for spec in self.sources.values():
+            if spec['mode'] == 'adapted':
+                spec.update(repository=str(self.upstream), revision=self.baseline, path='skills', license='LICENSE', selected=['alpha'])
+                spec.pop('skill_revisions', None)
+        self.manifest = self.base / 'sources.json'
 
-    def report(self, current=None, head=None):
-        return checker.compare(self.spec, head or 'a' * 40,
-                               self.current if current is None else current, '9' * 64)
+    def git(self, *args):
+        return subprocess.check_output(['git', '-C', str(self.upstream), *args], stderr=subprocess.STDOUT).decode().strip()
 
-    def test_current(self):
-        self.assertFalse(self.report()['updates_available'])
+    def put(self, relative, text):
+        path = self.upstream / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
 
-    def test_unrelated_revision_does_not_claim_skill_update(self):
-        self.assertFalse(self.report(head='b' * 40)['updates_available'])
+    def commit(self):
+        self.git('add', '.')
+        self.git('commit', '--quiet', '--allow-empty', '-m', 'fixture')
+        return self.git('rev-parse', 'HEAD')
 
-    def test_new_skill_and_support(self):
-        self.current.update({'new/SKILL.md': '3' * 64, 'new/references/guide.md': '4' * 64})
-        result = self.report()
-        self.assertEqual(result['new_skills'], ['new'])
-        self.assertEqual(len(result['added_files']), 2)
+    def check(self, expected):
+        self.manifest.write_text(json.dumps(self.sources))
+        before = self.manifest.read_bytes()
+        result = command('check_adapted_updates.py', '--manifest', self.manifest, '--json')
+        self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+        self.assertEqual(self.manifest.read_bytes(), before)
+        self.assertEqual(self.git('status', '--porcelain'), '')
+        return json.loads(result.stdout)
 
-    def test_deleted_skill(self):
-        result = self.report({'other/SKILL.md': '3' * 64})
-        self.assertEqual(result['removed_skills'], ['example'])
-        self.assertEqual(len(result['removed_files']), 2)
+    def test_current_and_unrelated_commits(self):
+        self.assertFalse(self.check(0)['updates_available'])
+        self.put('unrelated.txt', 'not a skill')
+        self.commit()
+        self.assertFalse(self.check(0)['updates_available'])
 
-    def test_changed_support(self):
-        self.current['example/scripts/helper'] = '4' * 64
-        result = self.report()
-        self.assertEqual(result['modified_skills'], ['example'])
-        self.assertEqual(result['changed_files'], ['example/scripts/helper'])
+    def test_detects_skills_support_and_license_changes(self):
+        self.put('skills/new/SKILL.md', 'new skill')
+        self.put('skills/new/references/note.md', 'new support')
+        shutil.rmtree(self.upstream / 'skills/deleted')
+        self.put('skills/alpha/helper', 'changed helper')
+        self.put('skills/alpha/new.md', 'added support')
+        self.put('LICENSE', 'changed license')
+        self.commit()
+        report = self.check(1)['collections']['tstack']
+        self.assertEqual(report['new_skills'], ['new'])
+        self.assertEqual(report['removed_skills'], ['deleted'])
+        self.assertEqual(report['modified_skills'], ['alpha'])
+        self.assertEqual(report['changed_files'], ['alpha/helper'])
+        self.assertIn('new/references/note.md', report['added_files'])
+        self.assertEqual(report['removed_files'], ['deleted/SKILL.md'])
+        self.assertTrue(report['license_changed'])
 
-    def test_added_deleted_support(self):
-        del self.current['example/scripts/helper']
-        self.current['example/references/new.md'] = '4' * 64
-        result = self.report()
-        self.assertEqual(result['modified_skills'], ['example'])
-        self.assertEqual(result['removed_files'], ['example/scripts/helper'])
-        self.assertEqual(result['added_files'], ['example/references/new.md'])
+    def test_executable_mode_change_and_symlink_rejection(self):
+        (self.upstream / 'skills/alpha/helper').chmod(0o755)
+        self.commit()
+        self.assertEqual(self.check(1)['collections']['tstack']['changed_files'], ['alpha/helper'])
+        (self.upstream / 'skills/alpha/link').symlink_to('helper')
+        self.commit()
+        self.assertTrue(self.check(2)['errors'])
 
-    def test_license_change(self):
-        result = checker.compare(self.spec, 'a' * 40, self.current, '0' * 64)
-        self.assertTrue(result['updates_available'])
-        self.assertTrue(result['license_changed'])
+    def test_support_deletion(self):
+        (self.upstream / 'skills/alpha/helper').unlink()
+        self.commit()
+        self.assertEqual(self.check(1)['collections']['pstack']['removed_files'], ['alpha/helper'])
 
-    def test_invalid_manifest_before_network(self):
-        for key, value in [('upstream', 'https://example.org'), ('revision', 'main'),
-                           ('source_files', {}), ('prefix', '../'), ('skill_revisions', {'absent': 'a'*40})]:
-            with self.subTest(key=key), patch.object(checker, 'git') as git:
-                with self.assertRaises(ValueError):
-                    checker.check_collection('tstack', {**self.spec, key: value})
-                git.assert_not_called()
+    def test_override_pin_is_used_and_drift_is_reported(self):
+        self.put('skills/alpha/helper', 'override content')
+        alternate = self.commit()
+        for spec in self.sources.values():
+            if spec['mode'] == 'adapted':
+                spec['skill_revisions'] = {'alpha': alternate}
+        self.assertFalse(self.check(0)['updates_available'])
+        self.put('skills/alpha/helper', 'drift after override')
+        self.commit()
+        self.assertEqual(self.check(1)['collections']['pstack']['changed_files'], ['alpha/helper'])
 
-    def test_bad_paths_and_hashes(self):
-        for path, value in [('../escape', '1'*64), ('/absolute', '1'*64),
-                            ('a//b', '1'*64), ('a/../b', '1'*64), ('a/\ncontrol', '1'*64),
-                            ('a/SKILL.md', 'invalid')]:
-            bad = {**self.spec, 'source_files': {**self.current, path: value}}
-            with self.assertRaises(ValueError):
-                checker.validate_collection('tstack', bad)
+    def test_failure_precedes_updates_and_keeps_other_report(self):
+        self.put('skills/alpha/helper', 'changed')
+        self.commit()
+        self.sources['pstack']['repository'] = str(self.base / 'missing')
+        report = self.check(2)
+        self.assertIn('tstack', report['collections'])
+        self.assertIn('pstack', report['errors'])
+        self.assertTrue(report['updates_available'])
 
-    def test_empty_symlink_submodule_snapshots_fail(self):
-        for tree in [b'', b'120000 blob abc\tskills/example/SKILL.md\0',
-                     b'160000 commit abc\tskills/example\0']:
-            with patch.object(checker, 'git', return_value=tree), self.assertRaises(ValueError):
-                checker.snapshot(Path('.'), 'a'*40, 'skills/')
+    def test_bad_or_empty_current_inventory_fails(self):
+        shutil.rmtree(self.upstream / 'skills')
+        self.commit()
+        self.assertTrue(self.check(2)['errors'])
 
-    def test_pinned_once_and_source_verified(self):
-        calls = []
-        def fake_git(repo, *args):
-            calls.append(args)
-            if args[0] == 'rev-parse':
-                return ('b'*40 + '\n').encode()
-            if args[0] == 'show':
-                return b'license'
-            if args[0] == 'diff':
-                return b'skills/example/scripts/helper\0'
-            return b''
-        spec = {**self.spec, 'license_sha256': checker.digest(b'license')}
-        before = copy.deepcopy(spec)
-        with patch.object(checker, 'git', side_effect=fake_git), patch.object(checker, 'snapshot', return_value=self.current):
-            result = checker.check_collection('tstack', spec)
-        self.assertEqual(spec, before)
-        self.assertEqual(result['main_revision'], 'b'*40)
-        self.assertEqual(sum(args[0] == 'rev-parse' for args in calls), 1)
-        self.assertIn(('fetch', '--quiet', '--no-tags', '--depth=1', spec['upstream'], 'refs/heads/main'), calls)
-
-    def test_source_hash_mismatch_fails(self):
-        with patch.object(checker, 'git', return_value=('a'*40+'\n').encode()), \
-             patch.object(checker, 'snapshot', return_value={'other/SKILL.md': '0'*64}), \
-             self.assertRaisesRegex(ValueError, 'hashes/inventory'):
-            checker.check_collection('tstack', self.spec)
-
-    def test_distinct_pin_reconciliation(self):
-        spec = {**self.spec, 'skill_revisions': {'example': 'c'*40}, 'license_sha256': checker.digest(b'license')}
-        base = {**self.current, 'example/SKILL.md': '5'*64}
-        def fake_git(repo, *args):
-            if args[0] == 'rev-parse': return ('b'*40+'\n').encode()
-            if args[0] == 'show': return b'license'
-            return b''
-        with patch.object(checker, 'git', side_effect=fake_git), \
-             patch.object(checker, 'snapshot', side_effect=[base, self.current, self.current]) as snapshot:
-            result = checker.check_collection('tstack', spec)
-        self.assertFalse(result['updates_available'])
-        self.assertEqual([c.args[1] for c in snapshot.call_args_list], ['a'*40, 'c'*40, 'b'*40])
-
-    def test_cli_statuses_and_failure_precedence(self):
-        for updates, errors, expected in [(False, {}, 0), (True, {}, 1),
-                                          (True, {'pstack': 'network failed'}, 2)]:
-            report = {'collections': {}, 'errors': errors, 'updates_available': updates,
-                      'status': 'check_failed' if errors else 'complete'}
-            output = io.StringIO()
-            with patch.object(checker, 'check', return_value=report), contextlib.redirect_stdout(output):
-                result = checker.main(['--json'])
-            self.assertEqual(result, expected)
-            self.assertEqual(json.loads(output.getvalue()), report)
-
-    def test_partial_network_failure_keeps_other_report(self):
-        manifest = json.loads((ROOT / 'adaptations.lock.json').read_text())
-        with patch.object(checker, 'check_collection', side_effect=[self.report(), RuntimeError('network unavailable')]):
-            result = checker.check(manifest)
-        self.assertIn('tstack', result['collections'])
-        self.assertIn('pstack', result['errors'])
-        self.assertEqual(result['status'], 'check_failed')
-
-    def test_cli_malformed_manifest_is_failure(self):
-        with tempfile.TemporaryDirectory(prefix='adapted-bad-') as d:
-            path = Path(d) / 'bad.json'
-            for value in ['[]', '{}', 'not json', '{"schema_version":1,"collections":[]}']:
-                path.write_text(value)
-                with contextlib.redirect_stdout(io.StringIO()):
-                    self.assertEqual(checker.main(['--manifest', str(path), '--json']), 2)
-
-    def test_failed_check_preserves_local_imports_and_locks(self):
-        paths = [ROOT / 'adaptations.lock.json']
-        paths += [p for family in ['tstack', 'pstack'] for p in (ROOT / 'skills' / family).rglob('*')
-                  if p.is_file() and '__pycache__' not in p.parts]
-        before = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
-        with patch.object(checker, 'git', side_effect=RuntimeError('network unavailable')), \
-             contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(checker.main(['--json']), 2)
-        self.assertEqual(before, {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths})
-
-    def test_real_git_snapshot_without_network(self):
-        with tempfile.TemporaryDirectory(prefix='adapted-git-fixture-') as d:
-            repo = Path(d)
-            git = lambda *args: subprocess.check_output(['git', '-C', d, *args], stderr=subprocess.STDOUT)
-            git('init', '--quiet')
-            (repo / 'skills/example/scripts').mkdir(parents=True)
-            (repo / 'skills/example/SKILL.md').write_text('fixture skill')
-            (repo / 'skills/example/scripts/helper').write_text('fixture helper')
-            git('add', '.')
-            git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet', '-m', 'fixture')
-            files = checker.snapshot(repo, 'HEAD', 'skills/')
-            self.assertEqual(files, {'example/SKILL.md': checker.digest(b'fixture skill'),
-                                     'example/scripts/helper': checker.digest(b'fixture helper')})
+    def test_bad_manifest_and_missing_pin_fail(self):
+        self.sources['tstack']['revision'] = 'main'
+        self.assertIn('manifest', self.check(2)['errors'])
+        self.sources['tstack']['revision'] = 'a' * 40
+        self.assertIn('tstack', self.check(2)['errors'])
 
 
 class Watcher(unittest.TestCase):

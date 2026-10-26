@@ -1,3 +1,3 @@
 # Domain documentation
 
-This repository uses a single context. Read root `GLOSSARY.md` before domain-sensitive work and reuse its terms in code and documentation. Record accepted architectural decisions under `docs/adr/`, reading relevant decisions before changing their subject. Do not invent a multi-context structure for this catalog.
+Use root `GLOSSARY.md` for shared terms. Record architectural decisions under `docs/adr/` when they need a lasting explanation.

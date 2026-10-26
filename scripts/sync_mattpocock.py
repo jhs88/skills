@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
-"""Select the published Matt manifest; delegate installation and hashes to npm skills."""
+"""Copy Matt's published skills through the pinned npm CLI, or check the local catalog."""
 import argparse
-from contextlib import contextmanager
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -12,260 +10,241 @@ import stat
 import subprocess
 import tempfile
 
-REPO = "https://github.com/mattpocock/skills"
-MANIFEST = ".claude-plugin/plugin.json"
-SELECTION = r"\./skills/(engineering|productivity)/([a-z0-9]+(?:-[a-z0-9]+)*)"
-SHA = re.compile(r"[0-9a-f]{40}")
 ROOT = Path(__file__).resolve().parents[1]
-CLI = Path(os.environ.get("SKILLS_CLI", ROOT / "node_modules/skills/bin/cli.mjs"))
-INSTALLER = {"package": "skills", "version": "1.7.4"}
-MANAGED = ("skills/mattpocock", "third_party/mattpocock", "upstreams.lock.json")
+CLI = Path(os.environ.get('SKILLS_CLI', ROOT / 'node_modules/skills/bin/cli.mjs'))
+SHA = r'[0-9a-f]{40}'
+NAME = r'[a-z0-9]+(?:-[a-z0-9]+)*'
 
 
-class SyncError(ValueError):
-    pass
+def read_json(data):
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f'Duplicate JSON key: {key}')
+            result[key] = value
+        return result
+    return json.loads(data, object_pairs_hook=unique)
 
 
-def digest(data):
-    return hashlib.sha256(data).hexdigest()
-
-
-def safe_chain(root, relative):
-    if not stat.S_ISDIR(root.lstat().st_mode):
-        raise SyncError(f"Not a real directory: {root}")
+def safe(root, relative):
     path = Path(relative)
-    if path.is_absolute() or any(p == ".." or "\\" in p or any(ord(c) < 32 for c in p) for p in path.parts):
-        raise SyncError(f"Invalid path: {relative}")
+    if (not isinstance(relative, str) or not relative or path.is_absolute()
+            or '..' in path.parts or '\\' in relative or any(ord(c) < 32 for c in relative)):
+        raise ValueError(f'Unsafe path: {relative!r}')
     current = root
-    for part in path.parts:
+    for part in ('.', *path.parts):
         current /= part
         if current.is_symlink():
-            raise SyncError(f"Symlink forbidden: {current}")
+            raise ValueError(f'Symlink forbidden: {current}')
     return current
 
 
 def regular(path):
     if not stat.S_ISREG(path.lstat().st_mode):
-        raise SyncError(f"Not a regular file: {path}")
+        raise ValueError(f'Not a regular file: {path}')
     return path.read_bytes()
 
 
-def files(root):
-    safe_chain(root, ".")
+def files(directory):
+    """Transient byte/mode comparison, never a persisted hash inventory."""
+    safe(directory, '.')
     result = {}
-    for path in sorted(root.rglob("*")):
-        relative = path.relative_to(root).as_posix()
-        safe_chain(root, relative)
+    for path in sorted(directory.rglob('*')):
+        if '__pycache__' in path.parts or path.suffix == '.pyc':
+            continue
+        safe(directory, str(path.relative_to(directory)))
         if not path.is_dir():
-            result[relative] = regular(path)
+            result[str(path.relative_to(directory))] = (regular(path), stat.S_IMODE(path.stat().st_mode))
     return result
 
 
+def load_sources(path=ROOT / 'sources.json'):
+    sources = read_json(regular(path))
+    if not isinstance(sources, dict) or set(sources) != {'mattpocock', 'tstack', 'pstack'}:
+        raise ValueError('Expected mattpocock, tstack and pstack sources')
+    for name, spec in sources.items():
+        if not re.fullmatch(SHA, spec['revision']):
+            raise ValueError(f'Invalid revision: {name}')
+        if not isinstance(spec['repository'], str) or not spec['repository'] or spec['repository'].startswith('-'):
+            raise ValueError(f'Invalid repository: {name}')
+        if spec['destination'] != f'skills/{name}':
+            raise ValueError(f'Invalid destination: {name}')
+        safe(ROOT, spec['license'])
+        if spec['mode'] == 'published' and name == 'mattpocock':
+            safe(ROOT, spec['manifest'])
+        elif spec['mode'] == 'adapted' and name != 'mattpocock':
+            safe(ROOT, spec['path'])
+            names = spec['selected']
+            if (not isinstance(names, list) or not names or any(not isinstance(n, str) or not re.fullmatch(NAME, n) for n in names)
+                    or len(set(names)) != len(names)):
+                raise ValueError(f'Invalid selection: {name}')
+            for skill, revision in spec.get('skill_revisions', {}).items():
+                if skill not in names or not re.fullmatch(SHA, revision):
+                    raise ValueError(f'Invalid skill revision: {skill}')
+        else:
+            raise ValueError(f'Invalid source mode: {name}')
+    return sources
+
+
 def parse_manifest(data):
-    def unique(pairs):
-        result = {}
-        for key, value in pairs:
-            if key in result:
-                raise SyncError(f"Duplicate JSON key: {key}")
-            result[key] = value
-        return result
-    obj = json.loads(data, object_pairs_hook=unique)
-    selected = obj.get("skills") if isinstance(obj, dict) else None
-    if not isinstance(selected, list) or not selected:
-        raise SyncError("Manifest skills must be a nonempty explicit list")
-    result = []
-    for value in selected:
-        match = re.fullmatch(SELECTION, value) if isinstance(value, str) else None
-        if not match:
-            raise SyncError(f"Unexpected published path: {value!r}")
-        result.append((match[2], value[2:]))
-    if len({name for name, _ in result}) != len(result):
-        raise SyncError("Duplicate skill name")
-    return sorted(result)
+    obj = read_json(data)
+    paths = obj.get('skills') if isinstance(obj, dict) else None
+    if not isinstance(paths, list) or not paths:
+        raise ValueError('Manifest skills must be a nonempty explicit list')
+    selected = {}
+    for path in paths:
+        match = re.fullmatch(r'\./skills/(engineering|productivity)/(' + NAME + ')', path) if isinstance(path, str) else None
+        if not match or match[2] in selected:
+            raise ValueError(f'Invalid or duplicate published path: {path!r}')
+        selected[match[2]] = path[2:]
+    return selected
 
 
-def run_cli(source, names, project):
-    """Use only project-local copies, with no inherited agent homes or telemetry."""
-    package = json.loads(regular(CLI.parent.parent / "package.json"))
-    if package.get("name") != INSTALLER["package"] or package.get("version") != INSTALLER["version"]:
-        raise SyncError("Run npm ci --ignore-scripts to install the pinned skills CLI")
-    project.mkdir(parents=True, exist_ok=True)
-    home = project / "home"
-    home.mkdir(exist_ok=True)
-    env = {"PATH": os.environ.get("PATH", ""), "HOME": str(home),
-           "XDG_CONFIG_HOME": str(home / ".config"), "XDG_CACHE_HOME": str(home / ".cache"),
-           "XDG_DATA_HOME": str(home / ".local/share"), "TMPDIR": str(home),
-           "DISABLE_TELEMETRY": "1", "DO_NOT_TRACK": "1", "CI": "1", "NO_COLOR": "1"}
-    result = subprocess.run(["node", str(CLI), "add", str(source), "--skill", *names,
-                             "-a", "codex", "-y", "--copy"], cwd=project, env=env,
-                            capture_output=True, text=True, timeout=180)
-    if result.returncode:
-        raise SyncError(f"skills CLI failed: {result.stderr}\n{result.stdout}")
+def validate_skill(directory):
+    inventory = files(directory)
+    text = (directory / 'SKILL.md').read_text()
+    match = re.match(r'---\n(.*?)\n---(?:\n|$)', text, re.S)
+    if (not match or not re.search(r'^name: [\'"]?' + re.escape(directory.name) + r'[\'"]?\s*$', match[1], re.M)
+            or not re.search(r'^description: \S', match[1], re.M)):
+        raise ValueError(f'Missing skill name/description frontmatter: {directory}')
+    return len(inventory)
 
 
-def cli_lock(project, selected):
-    """Keep CLI hashes; make local source paths relative to the pinned upstream."""
-    lock = json.loads(regular(project / "skills-lock.json"))
-    if lock.get("version") != 1 or set(lock["skills"]) != {name for name, _ in selected}:
-        raise SyncError("CLI lock selection mismatch")
-    for name, relative in selected:
-        entry = lock["skills"][name]
-        if entry.get("sourceType") != "local" or not re.fullmatch(r"[0-9a-f]{64}", entry.get("computedHash", "")):
-            raise SyncError(f"Invalid CLI lock entry: {name}")
-        entry["source"] = "./" + relative
-    return lock
-
-
-def write_json(path, data):
-    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-
-
-def prepare(source, revision, stage):
-    if not SHA.fullmatch(revision):
-        raise SyncError("Revision must be a full lowercase 40-character commit SHA")
-    raw = regular(safe_chain(source, MANIFEST))
-    selected = parse_manifest(raw)
-    license_data = regular(safe_chain(source, "LICENSE"))
-    if b"MIT License" not in license_data or b"Permission is hereby granted" not in license_data:
-        raise SyncError("Upstream MIT license missing or changed; human review required")
-    # Validate the entire selection before invoking the installer or touching managed data.
-    inventory = {name: files(safe_chain(source, relative)) for name, relative in selected}
-    if any(not data.get("SKILL.md", b"").strip() for data in inventory.values()):
-        raise SyncError("Missing or empty SKILL.md")
-    project = stage / "cli"
-    for name, relative in selected:
-        # Exact subtrees avoid discovery of unpublished skills with the same frontmatter name.
-        run_cli(source / relative, [name], project)
-        if files(project / ".agents/skills" / name) != inventory[name]:
-            raise SyncError(f"CLI did not preserve every upstream byte: {name}")
-    lock = cli_lock(project, selected)
-    dest = stage / "skills/mattpocock"
-    dest.parent.mkdir(parents=True)
-    shutil.move(project / ".agents/skills", dest)
-    third_party = stage / "third_party/mattpocock"
-    third_party.mkdir(parents=True)
-    (third_party / "LICENSE").write_bytes(license_data)
-    (third_party / "plugin.json").write_bytes(raw)
-    write_json(third_party / "skills-lock.json", lock)
-    write_json(stage / "upstreams.lock.json", {
-        "schema_version": 2, "repository": REPO, "revision": revision, "installer": INSTALLER,
-        "manifest_sha256": digest(raw), "license_sha256": digest(license_data)})
-
-
-def validate(root):
-    meta = json.loads(regular(safe_chain(root, "upstreams.lock.json")))
-    if (meta.get("schema_version") != 2 or meta.get("repository") != REPO
-            or not SHA.fullmatch(meta.get("revision", "")) or meta.get("installer") != INSTALLER):
-        raise SyncError("Invalid provenance metadata")
-    third = files(safe_chain(root, "third_party/mattpocock"))
-    if set(third) != {"LICENSE", "plugin.json", "skills-lock.json"}:
-        raise SyncError("Unexpected provenance files")
-    selected = parse_manifest(third["plugin.json"])
-    if digest(third["plugin.json"]) != meta["manifest_sha256"] or digest(third["LICENSE"]) != meta["license_sha256"]:
-        raise SyncError("Provenance content mismatch")
-    managed = safe_chain(root, "skills/mattpocock")
-    if {p.name for p in managed.iterdir()} != {name for name, _ in selected}:
-        raise SyncError("Managed skill set differs from manifest")
-    original = files(managed)
-    # Reinstall locally to obtain official CLI hashes, not a second hash implementation.
-    with tempfile.TemporaryDirectory(prefix="skills-check-") as temp:
-        project = Path(temp)
-        run_cli(managed, [name for name, _ in selected], project)
-        if files(project / ".agents/skills") != original or cli_lock(project, selected) != json.loads(third["skills-lock.json"]):
-            raise SyncError("Managed content differs from CLI lock; refusing local edits")
-    return {"revision": meta["revision"], "skills": len(selected), "files": len(original)}
-
-
-@contextmanager
-def exclusive(root):
-    guard = root / ".sync-in-progress"
-    try:
-        guard.mkdir()
-    except FileExistsError as exc:
-        raise SyncError("Another sync is active or left a stale .sync-in-progress; inspect before removing") from exc
-    try:
-        yield
-    finally:
-        guard.rmdir()
-
-
-def install(root, stage):
-    # Validation precedes replacement. Restore all targets on ordinary installation errors.
-    validate(stage)
-    for rel in MANAGED:
-        safe_chain(root, rel)
-    if any((root / rel).exists() for rel in MANAGED):
-        validate(root)
-    def content(path):
-        return files(path) if path.is_dir() else regular(path)
-    if all((root / rel).exists() and content(root / rel) == content(stage / rel) for rel in MANAGED):
-        return False
-    backup = stage / "backup"
-    backup.mkdir()
-    moved, installed = [], []
-    try:
-        for i, rel in enumerate(MANAGED):
-            target = root / rel
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if target.exists():
-                os.replace(target, backup / str(i))
-                moved.append((target, backup / str(i)))
-            os.replace(stage / rel, target)
-            installed.append(target)
-    except BaseException:
-        for target in reversed(installed):
-            shutil.rmtree(target) if target.is_dir() else target.unlink()
-        for target, saved in reversed(moved):
-            os.replace(saved, target)
-        raise
-    return True
-
-
-def sync(source, root, revision):
-    with exclusive(root), tempfile.TemporaryDirectory(prefix="skills-stage-") as temp:
-        stage = Path(temp)
-        prepare(source, revision, stage)
-        return install(root, stage)
+def validate(root=ROOT):
+    spec = load_sources(root / 'sources.json')['mattpocock']
+    selected = parse_manifest(regular(safe(root, 'third_party/mattpocock/plugin.json')))
+    directory = safe(root, spec['destination'])
+    if {p.name for p in directory.iterdir()} != set(selected):
+        raise ValueError('Catalog differs from published manifest')
+    regular(safe(root, 'third_party/mattpocock/LICENSE'))
+    return {'skills': len(selected), 'files': sum(validate_skill(directory / n) for n in selected), 'revision': spec['revision']}
 
 
 def git(*args, cwd=None):
-    return subprocess.run(["git", "-c", "core.hooksPath=/dev/null", *args], cwd=cwd,
-                          check=True, capture_output=True, text=True, timeout=180).stdout.strip()
+    return subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', *args], cwd=cwd, check=True,
+                          capture_output=True, text=True, timeout=180,
+                          env={**os.environ, 'GIT_TERMINAL_PROMPT': '0'}).stdout.strip()
+
+
+def clean(root, spec):
+    scope = [spec['destination'], 'third_party/mattpocock', 'sources.json', 'scripts', 'tests',
+             'package.json', 'package-lock.json', '.github/workflows', 'README.md', 'docs', 'GLOSSARY.md']
+    if git('status', '--porcelain', '--untracked-files=all', '--', *scope, cwd=root):
+        raise ValueError('Dirty sync scope; commit or stash scoped changes before syncing')
+
+
+def run_cli(source, name, project):
+    package = read_json((CLI.parent.parent / 'package.json').read_bytes())
+    if (package.get('name'), package.get('version')) != ('skills', '1.7.4'):
+        raise ValueError('Install pinned skills@1.7.4 with npm ci --ignore-scripts')
+    home = project / 'home'
+    home.mkdir(parents=True, exist_ok=True)
+    env = {'PATH': os.environ.get('PATH', ''), 'HOME': str(home), 'TMPDIR': str(home),
+           'XDG_CONFIG_HOME': str(home / '.config'), 'XDG_CACHE_HOME': str(home / '.cache'),
+           'XDG_DATA_HOME': str(home / '.local/share'), 'DISABLE_TELEMETRY': '1',
+           'DO_NOT_TRACK': '1', 'CI': '1', 'NO_COLOR': '1'}
+    result = subprocess.run(['node', str(CLI), 'add', str(source), '--skill', name,
+                             '-a', 'codex', '-y', '--copy'], cwd=project, env=env,
+                            capture_output=True, text=True, timeout=180)
+    if result.returncode:
+        raise ValueError(f'skills CLI failed: {result.stderr}\n{result.stdout}')
+
+
+def sync(source, root, revision):
+    if not re.fullmatch(SHA, revision):
+        raise ValueError('Revision must be a full lowercase 40-character commit SHA')
+    sources = load_sources(root / 'sources.json')
+    spec = sources['mattpocock']
+    clean(root, spec)
+    with tempfile.TemporaryDirectory(prefix='skills-stage-') as temp:
+        stage = Path(temp)
+        manifest = regular(safe(source, spec['manifest']))
+        selected = parse_manifest(manifest)
+        license_data = regular(safe(source, spec['license']))
+        if b'MIT License' not in license_data or b'Permission is hereby granted' not in license_data:
+            raise ValueError('Upstream MIT license missing or changed; review required')
+        # Validate every selected input before installation, and the complete output before replacement.
+        for name, relative in selected.items():
+            validate_skill(safe(source, relative))
+        for name, relative in selected.items():
+            run_cli(source / relative, name, stage / 'cli')
+            if files(stage / 'cli/.agents/skills' / name) != files(source / relative):
+                raise ValueError(f'CLI changed or omitted source bytes/modes: {name}')
+        destination = stage / spec['destination']
+        destination.parent.mkdir(parents=True)
+        shutil.move(stage / 'cli/.agents/skills', destination)
+        third = stage / 'third_party/mattpocock'
+        third.mkdir(parents=True)
+        (third / 'LICENSE').write_bytes(license_data)
+        (third / 'plugin.json').write_bytes(manifest)
+        raw = (root / 'sources.json').read_bytes()
+        if spec['revision'] != revision:
+            spec['revision'] = revision
+            raw = (json.dumps(sources, indent=2) + '\n').encode()
+        (stage / 'sources.json').write_bytes(raw)
+        validate(stage)
+        targets = [spec['destination'], 'third_party/mattpocock/LICENSE', 'third_party/mattpocock/plugin.json', 'sources.json']
+        for relative in targets:
+            safe(root, relative)
+        def content(path):
+            return files(path) if path.is_dir() else path.read_bytes()
+        changed = [r for r in targets if not (root / r).exists() or content(root / r) != content(stage / r)]
+        clean(root, spec)
+        saved, installed = [], []
+        try:
+            for i, relative in enumerate(changed):
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if target.exists():
+                    backup = stage / f'backup-{i}'
+                    os.replace(target, backup)
+                    saved.append((target, backup))
+                os.replace(stage / relative, target)
+                installed.append(target)
+        except BaseException:
+            for target in reversed(installed):
+                shutil.rmtree(target) if target.is_dir() else target.unlink()
+            for target, backup in reversed(saved):
+                os.replace(backup, target)
+            raise
+        return bool(changed)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", type=Path, help="trusted local checkout or synthetic fixture; never execute upstream code")
-    parser.add_argument("--revision", help="full commit SHA; local fixture callers assert provenance")
-    parser.add_argument("--check", action="store_true", help="validate using the installed CLI, without network")
+    parser.add_argument('--source', type=Path, help='trusted checkout or synthetic fixture, never executes upstream scripts')
+    parser.add_argument('--revision', help='full commit SHA; fixture callers assert provenance')
+    parser.add_argument('--check', action='store_true', help='offline structural catalog validation, no CLI installation')
     args = parser.parse_args()
     try:
         if args.check:
             if args.source or args.revision:
-                raise SyncError("--check cannot be combined with source/revision")
-            print(json.dumps({"status": "valid", **validate(ROOT)}, sort_keys=True))
+                raise ValueError('--check cannot be combined with source/revision')
+            print(json.dumps({'status': 'valid', **validate()}))
             return
-        if args.revision and not SHA.fullmatch(args.revision):
-            raise SyncError("Revision must be a full lowercase 40-character commit SHA")
+        spec = load_sources()['mattpocock']
+        clean(ROOT, spec)
+        if args.revision and not re.fullmatch(SHA, args.revision):
+            raise ValueError('Revision must be a full lowercase 40-character commit SHA')
         if args.source:
-            source = args.source.absolute()
-            changed = sync(source, ROOT, args.revision or git("rev-parse", "HEAD", cwd=source))
+            changed = sync(args.source.absolute(), ROOT, args.revision or git('rev-parse', 'HEAD', cwd=args.source))
         else:
-            revision = args.revision or git("ls-remote", REPO + ".git", "HEAD").partition("\t")[0]
-            if not SHA.fullmatch(revision):
-                raise SyncError("Upstream HEAD did not resolve to a full commit SHA")
-            with tempfile.TemporaryDirectory(prefix="mattpocock-upstream-") as temp:
-                source = Path(temp) / "upstream"
-                git("clone", "--no-checkout", "--depth", "1", REPO + ".git", str(source))
-                git("fetch", "--depth", "1", "origin", revision, cwd=source)
-                git("checkout", "--detach", revision, cwd=source)
-                if git("rev-parse", "HEAD", cwd=source) != revision:
-                    raise SyncError("Fetched revision mismatch")
+            revision = args.revision or git('ls-remote', spec['repository'], 'HEAD').partition('\t')[0]
+            if not re.fullmatch(SHA, revision):
+                raise ValueError('Invalid upstream HEAD revision')
+            with tempfile.TemporaryDirectory(prefix='matt-upstream-') as temp:
+                source = Path(temp) / 'upstream'
+                git('init', '--quiet', str(source))
+                git('fetch', '--quiet', '--depth=1', spec['repository'], revision, cwd=source)
+                git('checkout', '--quiet', '--detach', 'FETCH_HEAD', cwd=source)
+                if git('rev-parse', 'HEAD', cwd=source) != revision:
+                    raise ValueError('Fetched commit differs from requested revision')
                 changed = sync(source, ROOT, revision)
-        print(json.dumps({"status": "updated" if changed else "unchanged", **validate(ROOT)}, sort_keys=True))
-    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
-        parser.exit(1, f"sync failed: {exc}\n")
+        print(json.dumps({'status': 'updated' if changed else 'unchanged', **validate()}))
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError) as error:
+        parser.exit(1, f'sync failed: {error}\n')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

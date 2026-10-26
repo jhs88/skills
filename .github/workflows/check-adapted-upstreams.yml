@@ -23,7 +23,7 @@ jobs:
           persist-credentials: false
       - name: Test adapted import and checker contracts offline
         run: python3 -m unittest discover -s tests -p 'test_adapt*.py' -v
-      - name: Validate imported bytes and licenses
+      - name: Validate adapted catalog and licenses
         run: python3 scripts/validate_adaptations.py
       - name: Report upstream changes without rewriting adaptations
         shell: bash

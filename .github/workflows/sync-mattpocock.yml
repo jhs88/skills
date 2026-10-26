@@ -49,13 +49,13 @@ jobs:
           commit-message: 'chore: sync published Matt Pocock skills'
           title: 'chore: sync published Matt Pocock skills'
           body: |
-            Reconciles the explicit upstream plugin manifest at the revision recorded in upstreams.lock.json.
+            Reconciles the explicit upstream plugin manifest at the revision recorded in sources.json.
             Includes published additions, byte-for-byte updates, and removals within the managed subtree only.
             The updater tests and offline validation ran before this PR step.
-            Review the upstream prompts, support files, provenance, CLI lock, and deletions before merging.
+            Review the upstream prompts, support files, source revision, license, and deletions before merging.
             Experimental and unlisted directories are excluded. No automatic merge is configured.
           draft: false
           add-paths: |
             skills/mattpocock
             third_party/mattpocock
-            upstreams.lock.json
+            sources.json
