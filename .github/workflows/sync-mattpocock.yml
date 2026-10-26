@@ -1,0 +1,54 @@
+# Static commands only; no event-controlled text is interpolated into a shell.
+name: Sync published Matt Pocock skills
+on:
+  schedule:
+    - cron: '17 9 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-mattpocock
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'jhs88/skills'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out the default branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, verified upstream
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Test updater
+        run: python3 -m unittest discover -s tests -v
+      - name: Fetch and reconcile the published allowlist
+        run: python3 scripts/sync_mattpocock.py
+      - name: Validate proposed copied content
+        run: python3 scripts/sync_mattpocock.py --check
+      - name: Open or update the review PR
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7, verified upstream
+        with:
+          token: ${{ github.token }}
+          base: ${{ github.event.repository.default_branch }}
+          branch: automation/mattpocock-skills
+          delete-branch: true
+          commit-message: 'chore: sync published Matt Pocock skills'
+          title: 'chore: sync published Matt Pocock skills'
+          body: |
+            Reconciles the explicit upstream plugin manifest at the revision recorded in upstreams.lock.json.
+            Includes published additions, byte-for-byte updates, and removals within the managed subtree only.
+            The updater tests and offline validation ran before this PR step.
+            Review the upstream prompts, support files, provenance, hashes, and deletions before merging.
+            Experimental and unlisted directories are excluded. No automatic merge is configured.
+          draft: false
+          add-paths: |
+            skills/mattpocock
+            third_party/mattpocock
+            upstreams.lock.json

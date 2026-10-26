@@ -1,0 +1,28 @@
+{
+  "repository": "https://github.com/mattpocock/skills",
+  "revision": "5beb35b040e3de97e54fa9e386d7e42d15c295c2",
+  "skills": 27,
+  "skill_files": 79,
+  "support_files": 52,
+  "unittest_passed": 13,
+  "initial_network_sync_status": "updated",
+  "repeat_network_sync_status": "unchanged",
+  "automatic_head_sync_status": "unchanged",
+  "offline_validation_status": "valid",
+  "independently_verified_upstream_skill_git_blobs": 79,
+  "independently_verified_upstream_provenance_git_blobs": 2,
+  "license_sha256": "0e7ac423bf2c6e223b7c5b156f8cf72da49d748e56a1641402c31f22ad07dbb5",
+  "manifest_sha256": "15a5a7227915917856ea019ad82584ee877309b5bc3cabfb86b83b7e2cc6e238",
+  "lock_sha256": "bc575ae18599f133c231a4cd5badd4eadb822797d7a3d743e72c4bfbacc57a2a",
+  "workflow_yaml_parsed": true,
+  "workflow_actions_pinned_and_github_verified": true,
+  "github_workflows_executed": false,
+  "live_runtime_installed": false,
+  "commits_created": false,
+  "external_writes_performed": false,
+  "outstanding": [
+    "AGENTS.md creation blocked by protected-file approval timeout; not retried or bypassed",
+    "Publication and enabling GitHub Actions require separate approval",
+    "Local script and documentation licensing remains pending owner approval"
+  ]
+}

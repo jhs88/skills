@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.sync-stage-*/
+.sync-in-progress/
+.DS_Store
