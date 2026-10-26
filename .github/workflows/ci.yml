@@ -14,10 +14,19 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, verified upstream
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6, Node 24
         with:
           persist-credentials: false
+      - name: Set up pinned Node runtime
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6, Node 24
+        with:
+          node-version: '22.23.4'
+          package-manager-cache: false
+      - name: Install pinned skills CLI without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Test updater safety and reconciliation
         run: python3 -m unittest discover -s tests -v
       - name: Validate copied skills and provenance offline
         run: python3 scripts/sync_mattpocock.py --check
+      - name: Validate adapted imports offline
+        run: python3 scripts/validate_adaptations.py

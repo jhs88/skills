@@ -1,0 +1,41 @@
+# Read-only reporting. No issues, PRs, commits, installs, or skill rewrites.
+name: Check adapted Tstack and Pstack upstreams
+on:
+  schedule:
+    - cron: '41 9 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-adapted-upstreams
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # verified canonical commit
+        with:
+          persist-credentials: false
+      - name: Test adapted import and checker contracts offline
+        run: python3 -m unittest discover -s tests -p 'test_adapt*.py' -v
+      - name: Validate imported bytes and licenses
+        run: python3 scripts/validate_adaptations.py
+      - name: Report upstream changes without rewriting adaptations
+        shell: bash
+        run: |
+          set +e
+          python3 scripts/check_adapted_updates.py > adapted-upstream-report.md 2>&1
+          status=$?
+          set -e
+          cat adapted-upstream-report.md
+          # Render remote filenames as literal text, never executable commands or Markdown.
+          printf '```text\n' >> "$GITHUB_STEP_SUMMARY"
+          python3 -c 'from pathlib import Path; print(Path("adapted-upstream-report.md").read_text().replace("`", "\\u0060"), end="")' >> "$GITHUB_STEP_SUMMARY"
+          printf '\n```\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '\nExit status: %s. 0=current, 1=updates, 2=failure. Human reconciliation required.\n' "$status" >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"

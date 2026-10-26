@@ -5,3 +5,4 @@ __pycache__/
 .sync-stage-*/
 .sync-in-progress/
 .DS_Store
+node_modules/

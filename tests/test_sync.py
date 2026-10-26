@@ -29,7 +29,10 @@ class SyncTests(unittest.TestCase):
         self.add_skill("alpha")
         self.manifest(["./skills/engineering/alpha"])
 
-    def add_skill(self, name, category="engineering", content=b"---\nname: alpha\n---\nOriginal\n"):
+    def add_skill(self, name, category="engineering", content=None):
+        # Synthetic upstream fixtures. The real npm CLI requires valid frontmatter.
+        if content is None:
+            content = f"---\nname: {name}\ndescription: Synthetic test skill\n---\nOriginal\n".encode()
         dest = self.source / "skills" / category / name
         dest.mkdir(parents=True, exist_ok=True)
         (dest / "SKILL.md").write_bytes(content)
@@ -53,6 +56,16 @@ class SyncTests(unittest.TestCase):
             action()
         self.assertEqual(before, self.snapshot())
 
+    def test_uses_official_cli_lock_with_portable_upstream_sources(self):
+        self.sync()
+        lock = json.loads((self.root / "third_party/mattpocock/skills-lock.json").read_text())
+        self.assertEqual(lock["version"], 1)
+        self.assertEqual(set(lock["skills"]), {"alpha"})
+        self.assertEqual(lock["skills"]["alpha"]["source"], "./skills/engineering/alpha")
+        self.assertEqual(lock["skills"]["alpha"]["sourceType"], "local")
+        self.assertRegex(lock["skills"]["alpha"]["computedHash"], r"^[0-9a-f]{64}$")
+        self.assertNotIn(str(self.base), json.dumps(lock))
+
     def test_add_update_remove_and_unpromoted_exclusion(self):
         self.add_skill("unpublished", "experimental")
         self.add_skill("also-unpublished")
@@ -63,16 +76,60 @@ class SyncTests(unittest.TestCase):
         local.parent.mkdir()
         local.write_text("keep me")
         self.add_skill("beta", "productivity")
-        (self.source / "skills/engineering/alpha/SKILL.md").write_bytes(b"Updated\r\n")
+        updated = b"---\r\nname: alpha\r\ndescription: Updated synthetic skill\r\n---\r\nUpdated\r\n"
+        (self.source / "skills/engineering/alpha/SKILL.md").write_bytes(updated)
         self.manifest(["./skills/engineering/alpha", "./skills/productivity/beta"])
         self.assertTrue(self.sync(REV2))
-        self.assertEqual((dest / "alpha/SKILL.md").read_bytes(), b"Updated\r\n")
+        self.assertEqual((dest / "alpha/SKILL.md").read_bytes(), updated)
         self.manifest(["./skills/productivity/beta"])
         self.assertTrue(self.sync(REV2))
         self.assertFalse((dest / "alpha").exists())
         self.assertTrue((dest / "beta/SKILL.md").exists())
         self.assertEqual(local.read_text(), "keep me")
         self.assertEqual(updater.validate(self.root)["skills"], 1)
+
+    def test_unpublished_same_name_never_wins_discovery(self):
+        for category in ("misc", "in-progress", "deprecated", "experimental"):
+            self.add_skill("alpha", category, b"---\nname: alpha\ndescription: Not published\n---\nWrong copy\n")
+        self.sync()
+        self.assertIn(b"Original", (self.root / "skills/mattpocock/alpha/SKILL.md").read_bytes())
+        self.assertEqual(updater.validate(self.root)["skills"], 1)
+
+    def test_cli_failures_and_omitted_files_cannot_prune(self):
+        self.sync()
+        # The CLI intentionally skips metadata.json. Fail rather than silently lose bytes.
+        omitted = self.source / "skills/engineering/alpha/metadata.json"
+        omitted.write_text("{}")
+        self.assert_failed_unchanged(self.sync)
+        omitted.unlink()
+        skill = self.source / "skills/engineering/alpha/SKILL.md"
+        for invalid in (b"No frontmatter", b"---\nname: other\ndescription: Wrong name\n---\n"):
+            skill.write_bytes(invalid)
+            self.assert_failed_unchanged(self.sync)
+
+    def test_local_added_and_deleted_support_files_are_refused(self):
+        self.sync()
+        path = self.root / "skills/mattpocock/alpha/nested/asset.bin"
+        saved = path.read_bytes()
+        path.unlink()
+        self.assert_failed_unchanged(self.sync)
+        path.write_bytes(saved)
+        path.with_name("new.txt").write_text("local addition")
+        self.assert_failed_unchanged(self.sync)
+
+    def test_installer_gets_no_live_agent_environment_and_executes_no_skill_scripts(self):
+        script = self.source / "skills/engineering/alpha/never-run.sh"
+        sentinel = self.base / "executed"
+        script.write_text(f"#!/bin/sh\ntouch '{sentinel}'\n")
+        script.chmod(0o755)
+        live = self.base / "live-home"
+        live.mkdir()
+        with mock.patch.dict(os.environ, {"HOME": str(live), "CODEX_HOME": str(live),
+                                         "INSTALL_INTERNAL_SKILLS": "true"}):
+            self.sync()
+        self.assertFalse(sentinel.exists())
+        self.assertEqual(list(live.iterdir()), [])
+        self.assertEqual((self.root / "skills/mattpocock/alpha/never-run.sh").read_bytes(), script.read_bytes())
 
     def test_same_revision_is_noop_and_preserves_bytes_and_mtimes(self):
         self.sync()
@@ -206,11 +263,12 @@ class SyncTests(unittest.TestCase):
         scripts.mkdir()
         local_script = scripts / SCRIPT.name
         local_script.write_bytes(SCRIPT.read_bytes())
+        env = {**os.environ, "SKILLS_CLI": str(updater.CLI)}
         result = subprocess.run([sys.executable, str(local_script), "--source", str(self.source),
-                                 "--revision", REV1], capture_output=True, text=True)
+                                 "--revision", REV1], capture_output=True, text=True, env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)["status"], "updated")
-        result = subprocess.run([sys.executable, str(local_script), "--check"], capture_output=True, text=True)
+        result = subprocess.run([sys.executable, str(local_script), "--check"], capture_output=True, text=True, env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)["status"], "valid")
 

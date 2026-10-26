@@ -22,10 +22,17 @@ jobs:
       pull-requests: write
     steps:
       - name: Check out the default branch
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, verified upstream
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6, Node 24
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
+      - name: Set up pinned Node runtime
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6, Node 24
+        with:
+          node-version: '22.23.4'
+          package-manager-cache: false
+      - name: Install pinned skills CLI without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Test updater
         run: python3 -m unittest discover -s tests -v
       - name: Fetch and reconcile the published allowlist
@@ -33,7 +40,7 @@ jobs:
       - name: Validate proposed copied content
         run: python3 scripts/sync_mattpocock.py --check
       - name: Open or update the review PR
-        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7, verified upstream
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8, Node 24
         with:
           token: ${{ github.token }}
           base: ${{ github.event.repository.default_branch }}
@@ -45,7 +52,7 @@ jobs:
             Reconciles the explicit upstream plugin manifest at the revision recorded in upstreams.lock.json.
             Includes published additions, byte-for-byte updates, and removals within the managed subtree only.
             The updater tests and offline validation ran before this PR step.
-            Review the upstream prompts, support files, provenance, hashes, and deletions before merging.
+            Review the upstream prompts, support files, provenance, CLI lock, and deletions before merging.
             Experimental and unlisted directories are excluded. No automatic merge is configured.
           draft: false
           add-paths: |
