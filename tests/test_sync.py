@@ -21,13 +21,15 @@ class SyncTests(unittest.TestCase):
         self.target.mkdir()
         shutil.copytree(ROOT / 'scripts', self.target / 'scripts', ignore=shutil.ignore_patterns('__pycache__'))
         shutil.copy2(ROOT / 'sources.json', self.target / 'sources.json')
+        shutil.copy2(ROOT / 'LICENSES.md', self.target / 'LICENSES.md')
         shutil.copy2(ROOT / '.gitignore', self.target / '.gitignore')
         self.git('init', '--quiet')
         self.git('config', 'user.name', 'Fixture')
         self.git('config', 'user.email', 'fixture@example.invalid')
         self.commit()
         (self.source / '.claude-plugin').mkdir(parents=True)
-        (self.source / 'LICENSE').write_text('MIT License\nPermission is hereby granted\n')
+        notices = (ROOT / 'LICENSES.md').read_text()
+        (self.source / 'LICENSE').write_text(notices.split('```text\n', 1)[1].split('```', 1)[0])
         self.add_skill('alpha')
         self.manifest(['./skills/engineering/alpha'])
 
@@ -194,6 +196,62 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(self.success(self.command('--check', env={'SKILLS_CLI': '/not-installed'}))['status'], 'valid')
         skill.write_text('No frontmatter')
         self.assertNotEqual(self.command('--check').returncode, 0)
+
+    def test_check_rejects_empty_catalog_extra_file_and_invalid_directory(self):
+        self.success(self.sync())
+        directory = self.target / 'skills/mattpocock'
+        extra = directory / 'unexpected.txt'
+        extra.write_text('not a skill directory')
+        self.assertNotEqual(self.command('--check').returncode, 0)
+        extra.unlink()
+        invalid = directory / 'Invalid_Name'
+        invalid.mkdir()
+        self.assertNotEqual(self.command('--check').returncode, 0)
+        invalid.rmdir()
+        shutil.rmtree(directory / 'alpha')
+        self.assertNotEqual(self.command('--check').returncode, 0)
+
+    def test_changed_upstream_license_requires_review_and_preserves_all_notices(self):
+        self.success(self.sync())
+        self.commit()
+        before = self.snapshot()
+        license_file = self.source / 'LICENSE'
+        license_file.write_text(license_file.read_text().replace('2026 Matt Pocock', '2027 Matt Pocock'))
+        result = self.sync(REV2)
+        self.assertIn('human review required', result.stderr)
+        self.refused_unchanged(result, before)
+
+    def test_root_notices_missing_invalid_or_dirty_are_protected(self):
+        self.success(self.sync())
+        self.commit()
+        path = self.target / 'LICENSES.md'
+        original = path.read_bytes()
+        for data in (None, b'MIT License\nPermission is hereby granted\n', original + b'local edit\n'):
+            with self.subTest(data=data):
+                path.unlink()
+                if data is not None:
+                    path.write_bytes(data)
+                before = self.snapshot()
+                result = self.sync()
+                self.assertIn('Dirty sync scope', result.stderr)
+                self.refused_unchanged(result, before)
+                if data != original + b'local edit\n':
+                    self.assertNotEqual(self.command('--check').returncode, 0)
+                path.write_bytes(original)
+
+    def test_sync_changes_only_owned_skills_and_matt_revision(self):
+        before_sources = json.loads((self.target / 'sources.json').read_text())
+        notices = self.target / 'LICENSES.md'
+        before_notices = (notices.read_bytes(), notices.stat().st_mtime_ns, notices.stat().st_mode)
+        before = self.snapshot()
+        self.success(self.sync())
+        after_sources = json.loads((self.target / 'sources.json').read_text())
+        before_sources['mattpocock']['revision'] = REV1
+        self.assertEqual(after_sources, before_sources)
+        self.assertEqual((notices.read_bytes(), notices.stat().st_mtime_ns, notices.stat().st_mode), before_notices)
+        after = self.snapshot()
+        changed = {path for path in after if after[path] != before.get(path)}
+        self.assertTrue(all(path == 'sources.json' or path.startswith('skills/mattpocock/') for path in changed))
 
     def test_bad_revision_license_symlink_and_special_file_preserve_output(self):
         self.success(self.sync())

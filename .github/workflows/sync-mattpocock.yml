@@ -57,5 +57,4 @@ jobs:
           draft: false
           add-paths: |
             skills/mattpocock
-            third_party/mattpocock
             sources.json

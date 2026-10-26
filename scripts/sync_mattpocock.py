@@ -113,11 +113,13 @@ def validate_skill(directory):
 
 def validate(root=ROOT):
     spec = load_sources(root / 'sources.json')['mattpocock']
-    selected = parse_manifest(regular(safe(root, 'third_party/mattpocock/plugin.json')))
     directory = safe(root, spec['destination'])
-    if {p.name for p in directory.iterdir()} != set(selected):
-        raise ValueError('Catalog differs from published manifest')
-    regular(safe(root, 'third_party/mattpocock/LICENSE'))
+    selected = sorted(p.name for p in directory.iterdir())
+    if not selected or any(not re.fullmatch(NAME, name) or not (directory / name).is_dir() for name in selected):
+        raise ValueError('Catalog must contain nonempty named skill directories')
+    notices = regular(safe(root, 'LICENSES.md'))
+    if b'Copyright (c) 2026 Matt Pocock' not in notices or b'Permission is hereby granted' not in notices:
+        raise ValueError('Missing Matt Pocock MIT notice in LICENSES.md')
     return {'skills': len(selected), 'files': sum(validate_skill(directory / n) for n in selected), 'revision': spec['revision']}
 
 
@@ -128,7 +130,7 @@ def git(*args, cwd=None):
 
 
 def clean(root, spec):
-    scope = [spec['destination'], 'third_party/mattpocock', 'sources.json', 'scripts', 'tests',
+    scope = [spec['destination'], 'LICENSES.md', 'sources.json', 'scripts', 'tests',
              'package.json', 'package-lock.json', '.github/workflows', 'README.md', 'docs', 'GLOSSARY.md']
     if git('status', '--porcelain', '--untracked-files=all', '--', *scope, cwd=root):
         raise ValueError('Dirty sync scope; commit or stash scoped changes before syncing')
@@ -164,6 +166,9 @@ def sync(source, root, revision):
         license_data = regular(safe(source, spec['license']))
         if b'MIT License' not in license_data or b'Permission is hereby granted' not in license_data:
             raise ValueError('Upstream MIT license missing or changed; review required')
+        notices = regular(safe(root, 'LICENSES.md'))
+        if license_data not in notices:
+            raise ValueError('Upstream license differs from LICENSES.md; human review required before syncing')
         # Validate every selected input before installation, and the complete output before replacement.
         for name, relative in selected.items():
             validate_skill(safe(source, relative))
@@ -174,17 +179,14 @@ def sync(source, root, revision):
         destination = stage / spec['destination']
         destination.parent.mkdir(parents=True)
         shutil.move(stage / 'cli/.agents/skills', destination)
-        third = stage / 'third_party/mattpocock'
-        third.mkdir(parents=True)
-        (third / 'LICENSE').write_bytes(license_data)
-        (third / 'plugin.json').write_bytes(manifest)
+        (stage / 'LICENSES.md').write_bytes(notices)
         raw = (root / 'sources.json').read_bytes()
         if spec['revision'] != revision:
             spec['revision'] = revision
             raw = (json.dumps(sources, indent=2) + '\n').encode()
         (stage / 'sources.json').write_bytes(raw)
         validate(stage)
-        targets = [spec['destination'], 'third_party/mattpocock/LICENSE', 'third_party/mattpocock/plugin.json', 'sources.json']
+        targets = [spec['destination'], 'sources.json']
         for relative in targets:
             safe(root, relative)
         def content(path):

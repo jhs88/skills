@@ -2,7 +2,7 @@
 
 The selected Tstack and Pstack skills are maintained copies, not automatic mirrors. `sources.json` records their upstream repositories, collection paths, selected names, and baseline revisions. Pstack's `technical-writing` has a separate revision override. Git records the maintained content and edits.
 
-Council uses runtime-provided model discovery. Technical writing uses runtime-neutral invocation wording. The included `pr-wait` helper retains its imported bytes and executable mode. Keep each collection's license and attribution under `third_party/`.
+Council uses runtime-provided model discovery. Technical writing uses runtime-neutral invocation wording. The included `pr-wait` helper retains its imported bytes and executable mode. Keep each collection's license and attribution from [LICENSES.md](../LICENSES.md).
 
 ## Check for updates
 

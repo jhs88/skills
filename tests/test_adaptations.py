@@ -36,9 +36,10 @@ class Packaging(unittest.TestCase):
         temp = tempfile.TemporaryDirectory(prefix='adapted-validation-')
         self.addCleanup(temp.cleanup)
         root = Path(temp.name)
-        for path in ['skills/tstack', 'skills/pstack', 'third_party/tstack', 'third_party/pstack']:
+        for path in ['skills/tstack', 'skills/pstack']:
             shutil.copytree(ROOT / path, root / path, ignore=shutil.ignore_patterns('__pycache__'))
         shutil.copy2(ROOT / 'sources.json', root / 'sources.json')
+        shutil.copy2(ROOT / 'LICENSES.md', root / 'LICENSES.md')
         return root
 
     def test_complete_catalog(self):
@@ -78,6 +79,19 @@ class Packaging(unittest.TestCase):
         result = command('validate_adaptations.py', '--root', root)
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn('not executable', result.stdout)
+
+    def test_root_notices_require_both_authors_and_mit_grant(self):
+        for missing in ('Theo Browne', 'Lauren Tan', 'Permission is hereby granted', None):
+            with self.subTest(missing=missing):
+                root = self.copied_root()
+                path = root / 'LICENSES.md'
+                if missing is None:
+                    path.unlink()
+                else:
+                    path.write_text(path.read_text().replace(missing, 'removed'))
+                result = command('validate_adaptations.py', '--root', root)
+                self.assertEqual(result.returncode, 2, result.stdout)
+                self.assertIn('LICENSES.md', result.stdout)
 
 
 class Updates(unittest.TestCase):

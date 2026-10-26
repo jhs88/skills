@@ -10,4 +10,4 @@
 
 Git is the record of the imported files and maintained adaptations. Source revisions identify comparison baselines, not a claim that every adapted file matches upstream. The source manifest contains no per-file inventories or hashes.
 
-Keep collection licenses and notices under `third_party/` when redistributing their files. These grants do not assign a license to original repository code or documentation.
+Keep the applicable notices in [LICENSES.md](../LICENSES.md) when redistributing imported files. These grants do not assign a license to original repository code or documentation.

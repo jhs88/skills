@@ -10,15 +10,16 @@ from sync_mattpocock import ROOT, files, load_sources, regular, safe, validate_s
 
 def validate(root=ROOT):
     count = total = 0
+    notices = regular(safe(root, 'LICENSES.md'))
+    authors = {'tstack': b'Copyright (c) 2026 Theo Browne', 'pstack': b'Copyright (c) 2026 Lauren Tan'}
     for name, spec in load_sources(root / 'sources.json').items():
         if spec['mode'] != 'adapted':
             continue
         directory = safe(root, spec['destination'])
         if {p.name for p in directory.iterdir()} != set(spec['selected']):
             raise ValueError(f'Catalog differs from source selection: {name}')
-        license_data = regular(safe(root, f'third_party/{name}/LICENSE'))
-        if b'Permission is hereby granted' not in license_data:
-            raise ValueError(f'Missing MIT grant: {name}')
+        if authors[name] not in notices or b'Permission is hereby granted' not in notices:
+            raise ValueError(f'Missing MIT notice in LICENSES.md: {name}')
         for skill in spec['selected']:
             folder = directory / skill
             total += validate_skill(folder)
