@@ -60,6 +60,6 @@ Omit `-g` for a project installation. Keep local customizations separate from in
 
 ## Maintain the collection
 
-See [verification](docs/verification.md) for contributor setup and tests, [Matt sync](docs/npm-skills-verification.md) for automated update PRs, and [adapted collections](docs/adapted-imports.md) for tstack and Pstack update checks.
+See [maintenance](docs/maintenance.md) for validation, upstream updates, and contributor guidance.
 
-Source repositories are listed in [sources](docs/provenance.md). Imported skill licenses and notices are in [LICENSES.md](LICENSES.md); original repository code and documentation do not yet have an assigned license.
+Upstream repositories and revisions are recorded in [sources.json](sources.json). Imported skill licenses and notices are in [LICENSES.md](LICENSES.md); original repository code and documentation do not yet have an assigned license.
