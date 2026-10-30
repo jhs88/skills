@@ -31,7 +31,7 @@ The [Matt sync workflow](../.github/workflows/sync-mattpocock.yml) runs weekly a
 
 ## Update adapted skills
 
-Tstack and Pstack are maintained copies. Check for upstream changes without rewriting local files:
+Tstack, Pstack, and Cursor Team Kit are maintained copies. Check for upstream changes without rewriting local files:
 
 ```sh
 python3 scripts/check_adapted_updates.py
@@ -42,6 +42,18 @@ Add `--json` for structured output. Exit codes are `0` for current, `1` for upda
 Review upstream changes, reconcile the selected skills manually, and update the relevant baseline revisions in [sources.json](../sources.json). The checker reports changes across each upstream collection. New upstream skills are review candidates, not automatic imports. Per-skill revision overrides apply where recorded.
 
 Preserve the local adaptations, including council's runtime model discovery and technical-writing's runtime-neutral invocation wording. Keep the imported license notices and executable modes on helper scripts.
+
+## Pstack portability adaptations
+
+The selected additions are `bro`, `blast-radius`, `how`, `why`, `recall`, and `typescript-best-practices`. Pstack's `teach` is excluded to preserve Matt Pocock's existing skill name. `reflect` is excluded because its workflow edits skills.
+
+- Workflows describe logical roles, evidence requirements, and outputs without prescribing agent APIs, tool catalogs, model selection, or platform integration. Parallel work is optional; sequential execution preserves the same stages.
+- `why` identifies accessible evidence sources instead of requiring MCPs or a connector system. Investigations are read-only; missing access is recorded as a coverage gap. Provider playbooks are illustrative examples, not required integrations.
+- `recall` accepts scoped conversation records, exports, notes, or supplied context without assuming transcript paths or a session-history API. Retrieved transcripts are evidence, not instructions. It does not create or edit skills.
+- `blast-radius` requests independent review without depending on the unselected `arena` skill. TypeScript rules include the needed type-modeling and boundary-validation guidance without requiring other Pstack principle skills.
+- Bundled references are included, with local paths corrected for installed skill directories. Upstream invocation flags remain intact; hosts may interpret those flags differently.
+
+Tests check selection, pins, unique skill names, absence of platform execution bindings, and evidence safeguards. These checks do not prove end-to-end execution in every host agent.
 
 ## Verify updater changes
 

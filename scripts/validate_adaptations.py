@@ -11,7 +11,8 @@ from sync_mattpocock import ROOT, files, load_sources, regular, safe, validate_s
 def validate(root=ROOT):
     count = total = 0
     notices = regular(safe(root, 'LICENSES.md'))
-    authors = {'tstack': b'Copyright (c) 2026 Theo Browne', 'pstack': b'Copyright (c) 2026 Lauren Tan'}
+    authors = {'tstack': b'Copyright (c) 2026 Theo Browne', 'pstack': b'Copyright (c) 2026 Lauren Tan',
+               'cursor-team-kit': b'Copyright (c) 2026 Cursor'}
     for name, spec in load_sources(root / 'sources.json').items():
         if spec['mode'] != 'adapted':
             continue
