@@ -14,7 +14,17 @@
     "destination": "skills/tstack",
     "license": "LICENSE",
     "mode": "adapted",
-    "selected": ["babysit-pr", "council", "file-pr", "full-send", "full-stop", "leaving-pr-comments", "modernize", "sol-loop", "takeover"]
+    "selected": [
+      "babysit-pr",
+      "council",
+      "file-pr",
+      "full-send",
+      "full-stop",
+      "leaving-pr-comments",
+      "modernize",
+      "sol-loop",
+      "takeover"
+    ]
   },
   "pstack": {
     "repository": "https://github.com/cursor/plugins",
@@ -23,9 +33,35 @@
     "destination": "skills/pstack",
     "license": "pstack/LICENSE",
     "mode": "adapted",
-    "selected": ["technical-writing", "unslop"],
+    "selected": [
+      "technical-writing",
+      "unslop",
+      "bro",
+      "blast-radius",
+      "how",
+      "why",
+      "recall",
+      "typescript-best-practices"
+    ],
     "skill_revisions": {
-      "technical-writing": "bdf7aa355337897f167153e05069aca505dae17c"
+      "technical-writing": "bdf7aa355337897f167153e05069aca505dae17c",
+      "bro": "4dd1d05818d19792e7cd6e818f1667f95f7e1dbe",
+      "blast-radius": "4dd1d05818d19792e7cd6e818f1667f95f7e1dbe",
+      "how": "4dd1d05818d19792e7cd6e818f1667f95f7e1dbe",
+      "why": "4dd1d05818d19792e7cd6e818f1667f95f7e1dbe",
+      "recall": "4dd1d05818d19792e7cd6e818f1667f95f7e1dbe",
+      "typescript-best-practices": "4dd1d05818d19792e7cd6e818f1667f95f7e1dbe"
     }
+  },
+  "cursor-team-kit": {
+    "repository": "https://github.com/cursor/plugins",
+    "revision": "4dd1d05818d19792e7cd6e818f1667f95f7e1dbe",
+    "path": "cursor-team-kit/skills",
+    "destination": "skills/cursor-team-kit",
+    "license": "cursor-team-kit/LICENSE",
+    "mode": "adapted",
+    "selected": [
+      "deslop"
+    ]
   }
 }

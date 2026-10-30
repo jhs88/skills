@@ -36,7 +36,7 @@ class Packaging(unittest.TestCase):
         temp = tempfile.TemporaryDirectory(prefix='adapted-validation-')
         self.addCleanup(temp.cleanup)
         root = Path(temp.name)
-        for path in ['skills/tstack', 'skills/pstack']:
+        for path in ['skills/tstack', 'skills/pstack', 'skills/cursor-team-kit']:
             shutil.copytree(ROOT / path, root / path, ignore=shutil.ignore_patterns('__pycache__'))
         shutil.copy2(ROOT / 'sources.json', root / 'sources.json')
         shutil.copy2(ROOT / 'LICENSES.md', root / 'LICENSES.md')
@@ -45,7 +45,7 @@ class Packaging(unittest.TestCase):
     def test_complete_catalog(self):
         result = command('validate_adaptations.py')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(json.loads(result.stdout), {'skills': 11, 'files': 14, 'status': 'valid'})
+        self.assertEqual(json.loads(result.stdout), {'skills': 18, 'files': 36, 'status': 'valid'})
 
 
     def test_missing_support_invalid_frontmatter_and_extra_skill_fail(self):
@@ -71,7 +71,7 @@ class Packaging(unittest.TestCase):
         (directory / 'SKILL.md').write_text('---\nname: example\ndescription: Synthetic fixture\n---\n')
         result = command('validate_adaptations.py', '--root', root)
         self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertEqual(json.loads(result.stdout)['skills'], 12)
+        self.assertEqual(json.loads(result.stdout)['skills'], 19)
 
     def test_executable_support_mode_required(self):
         root = self.copied_root()
@@ -80,8 +80,8 @@ class Packaging(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn('not executable', result.stdout)
 
-    def test_root_notices_require_both_authors_and_mit_grant(self):
-        for missing in ('Theo Browne', 'Lauren Tan', 'Permission is hereby granted', None):
+    def test_root_notices_require_all_authors_and_mit_grant(self):
+        for missing in ('Theo Browne', 'Lauren Tan', '2026 Cursor', 'Permission is hereby granted', None):
             with self.subTest(missing=missing):
                 root = self.copied_root()
                 path = root / 'LICENSES.md'

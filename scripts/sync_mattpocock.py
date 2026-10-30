@@ -61,8 +61,8 @@ def files(directory):
 
 def load_sources(path=ROOT / 'sources.json'):
     sources = read_json(regular(path))
-    if not isinstance(sources, dict) or set(sources) != {'mattpocock', 'tstack', 'pstack'}:
-        raise ValueError('Expected mattpocock, tstack and pstack sources')
+    if not isinstance(sources, dict) or set(sources) != {'mattpocock', 'tstack', 'pstack', 'cursor-team-kit'}:
+        raise ValueError('Expected mattpocock, tstack, pstack and cursor-team-kit sources')
     for name, spec in sources.items():
         if not re.fullmatch(SHA, spec['revision']):
             raise ValueError(f'Invalid revision: {name}')

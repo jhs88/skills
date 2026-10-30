@@ -44,7 +44,7 @@ For example, install only `unslop` globally for Claude Code:
 npx skills add jhs88/skills -g --skill unslop -a claude-code -y
 ```
 
-The collection includes Matt Pocock's published engineering and productivity skills, adapted tstack PR workflows, and Pstack's `technical-writing` and `unslop`. Browse the [skill directories](skills) for their instructions.
+The collection includes Matt Pocock's published engineering and productivity skills, adapted tstack PR workflows, Pstack's writing, code investigation, recall, and TypeScript skills, and Cursor Team Kit's `deslop` code-cleanup skill. Browse the [skill directories](skills) for their instructions.
 
 ## Refresh your installation
 
