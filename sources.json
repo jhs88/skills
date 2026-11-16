@@ -9,7 +9,7 @@
   },
   "tstack": {
     "repository": "https://github.com/t3dotgg/tstack",
-    "revision": "7de017b3fc9d50c03cf3ecb98fb71e0ca65a78bd",
+    "revision": "11e37a74d0a6868c121cd0910ab2b3bd9873b92a",
     "path": "skills",
     "destination": "skills/tstack",
     "license": "LICENSE",

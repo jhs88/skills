@@ -1,6 +1,6 @@
 ---
 name: full-stop
-description: Use when explicitly asked for full-stop PR preparation.
+description: Use when explicitly asked for full-stop PR preparation, including a closing "Full stop." that reads like emphasis.
 ---
 
 # Full Stop
