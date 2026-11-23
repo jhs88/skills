@@ -1,7 +1,7 @@
 {
   "mattpocock": {
     "repository": "https://github.com/mattpocock/skills",
-    "revision": "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d",
+    "revision": "abeeaf95660ba9e8b7c753eb38f441ca707a8823",
     "manifest": ".claude-plugin/plugin.json",
     "destination": "skills/mattpocock",
     "license": "LICENSE",
